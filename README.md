@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ## Knowledge Base – LLM-powered KB & Chat (FastAPI + OpenAI + Elasticsearch)
 
 This project is an LLM-powered knowledge base and chat backend built with **Python (FastAPI)**, **OpenAI**, and **Elasticsearch**.
@@ -163,3 +164,35 @@ If a chat is bound to a `kb_uuid`, every Q&A round is also saved via `save_qa_to
 - This project focuses on **storing and reusing** LLM answers, not full RAG prompting.
 - Vector dimension currently matches OpenAI `text-embedding-ada-002` (1536 dims).
 - Keep `.env` and your OpenAI key private; `.env` is Git-ignored by default.
+=======
+## kb-frontend
+
+Simple React + TypeScript frontend for the `knowledge-base` backend.
+
+It provides two main pages:
+
+- **Chat**
+  - Paste a JWT token from `POST /api/v1/login`.
+  - (Optional) Fill `KB UUID` to bind a knowledge base.
+  - Send messages to the AI; the backend calls OpenAI and automatically stores Q&A and answer embeddings into Elasticsearch.
+
+- **Semantic Search**
+  - Paste the same JWT token and `KB UUID`.
+  - Enter a natural-language query and `Top K`.
+  - Calls `POST /api/v1/kb/{kb_uuid}/semantic-search` and shows the Top-K most similar historical answers (vector-based cosine similarity).
+
+### Tech Stack
+
+- React + TypeScript
+- Vite
+- Axios
+
+### Run
+
+```bash
+cd kb-frontend
+npm install
+npm run dev
+```
+
+>>>>>>> frontend
