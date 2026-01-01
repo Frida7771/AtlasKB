@@ -76,7 +76,7 @@ npm run dev                      # http://127.0.0.1:5173
 ## Frontend Highlights
 
 - **Auth-first shell** ensures chat/search/KB tabs only render after login.
-- **Chat tab**: conversation list with rename/delete, KB UUID input, tip box, referenced-snippet rendering, fixed-height layout with inner scroll.
+- **Chat tab**: conversation list with rename/delete, KB UUID input, tip box, referenced-snippet rendering, streaming typing effect, fixed-height layout with inner scroll.
 - **Search tab**: single keyword mode, descriptive hints, highlighted results rendered via `dangerouslySetInnerHTML`.
 - **Knowledge bases tab**: asymmetric grid (narrow create form + wide list), pagination (5 per page), “Use & copy”, “Export”, “Delete” buttons aligned to the right, immediate refresh after actions.
 
@@ -86,7 +86,7 @@ npm run dev                      # http://127.0.0.1:5173
 
 | Login & Tabs | Chat Workspace |
 | --- | --- |
-| ![Login](demo/4v.jpg) | ![Chat](demo/3v.jpg) |
+| ![Login](demo/4vv.jpg) | ![Chat](demo/3v.jpg) |
 
 | Keyword Search | Knowledge Bases |
 | --- | --- |
