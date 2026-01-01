@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { API_BASE } from "./config";
 
@@ -73,6 +73,8 @@ const ChatPage = ({
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
   const [chatListError, setChatListError] = useState<string | null>(null);
+  const chatBoxRef = useRef<HTMLDivElement | null>(null);
+  const userScrollingRef = useRef(false);
 
   const hasToken = token.trim().length > 0;
 
@@ -96,7 +98,7 @@ const ChatPage = ({
     onKbChange?.(value);
   };
 
-  const loadChats = async (replace = true) => {
+  const loadChats = async () => {
     if (!hasToken) return;
     setChatsLoading(true);
     setChatListError(null);
@@ -107,12 +109,7 @@ const ChatPage = ({
         params: { page: 1, size: 50 },
       });
       const list = res.data?.data?.list ?? [];
-      setChats((prev) => {
-        if (!replace && prev.length > 0) {
-          return prev;
-        }
-        return list;
-      });
+      setChats(list);
     } catch (e: any) {
       const msg =
         e?.response?.data?.detail?.msg ||
@@ -209,7 +206,32 @@ const ChatPage = ({
     return () => {
       cancelled = true;
     };
-  }, [chatUuid, hasToken, token, loading]);
+  }, [chatUuid, hasToken, token]);
+
+  useEffect(() => {
+    userScrollingRef.current = false;
+  }, [chatUuid]);
+
+  useEffect(() => {
+    if (historyLoading) {
+      return;
+    }
+    if (userScrollingRef.current) {
+      return;
+    }
+    if (!chatBoxRef.current) {
+      return;
+    }
+    chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
+  }, [messages, historyLoading]);
+
+  const handleChatScroll = () => {
+    const node = chatBoxRef.current;
+    if (!node) return;
+    const nearBottom =
+      node.scrollHeight - (node.scrollTop + node.clientHeight) < 40;
+    userScrollingRef.current = !nearBottom;
+  };
 
   const ensureChatExists = async (forceNew = false): Promise<string> => {
     if (chatUuid && !forceNew) {
@@ -472,7 +494,11 @@ const ChatPage = ({
             </div>
           </div>
 
-          <div style={styles.chatBox}>
+          <div
+            ref={chatBoxRef}
+            style={styles.chatBox}
+            onScroll={handleChatScroll}
+          >
             {historyLoading ? (
               <div style={styles.placeholder}>Loading conversation...</div>
             ) : messages.length === 0 ? (

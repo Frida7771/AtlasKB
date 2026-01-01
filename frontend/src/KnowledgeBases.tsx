@@ -122,7 +122,7 @@ const KnowledgeBasesPage = ({ token, selectedKbUuid, onSelectKb }: Props) => {
       if (selectedKbUuid === uuid && onSelectKb) {
         onSelectKb("");
       }
-      fetchList(targetPage);
+      await fetchList(targetPage);
     } catch (e: any) {
       const msg =
         e?.response?.data?.detail?.msg ||
