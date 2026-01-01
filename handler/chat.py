@@ -65,18 +65,23 @@ async def update_chat_title(
     return {"code": 200, "msg": "update success"}
 
 
-@router.get("/chat/{chat_uuid}/messages", summary="message list", response_model=List[ChatMessage])
+@router.get(
+    "/chat/{chat_uuid}/messages",
+    summary="message list",
+    response_model=List[ChatMessage],
+)
 async def list_messages(
     chat_uuid: str,
     current_user: UserClaim = Depends(get_current_user),
 ) -> List[ChatMessage]:
-    messages = chat_service.list_messages_service(current_user.uuid, chat_uuid, limit=100)
-    if not messages:
-        # maybe chat not found or no permission
-        chat = chat_service.get_chat(chat_uuid) if hasattr(chat_service, "get_chat") else None
-        if not chat:
-            raise HTTPException(status_code=404, detail={"code": 404, "msg": "chat not found"})
-    return messages
+    try:
+        return chat_service.list_messages_service(
+            current_user.uuid, chat_uuid, limit=100
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404, detail={"code": 404, "msg": str(exc)}
+        ) from exc
 
 
 @router.post("/chat/{chat_uuid}/message", summary="send message", response_model=ChatReply)

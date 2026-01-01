@@ -5,13 +5,14 @@ services:
     environment:
       - TZ=America/New_York
       - discovery.type=single-node
+      - xpack.security.enabled=true
+      - xpack.security.transport.ssl.enabled=true
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    volumes:
-      - ./elasticsearch/data:/usr/share/elasticsearch/data
     ports:
       - 9200:9200
       - 9300:9300
-
+    volumes:
+      - ./elasticsearch/data:/usr/share/elasticsearch/data
 
   kibana:
     image: kibana:7.13.4
@@ -19,7 +20,8 @@ services:
     ports:
       - 5601:5601
     environment:
-      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: elastic
+      ELASTICSEARCH_PASSWORD: ${ELASTIC_PASSWORD}
     depends_on:
       - elasticsearch
-

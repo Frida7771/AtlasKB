@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 
 from elasticsearch import Elasticsearch
+from elasticsearch.exceptions import NotFoundError
 
 from dao.init import get_es_client
 from models.chat import CHAT_INDEX, CHAT_MESSAGE_INDEX
@@ -41,23 +42,35 @@ def _ensure_indices(client: Elasticsearch) -> None:
 def create_chat(doc: Dict[str, Any]) -> None:
     client = get_es_client()
     _ensure_indices(client)
-    client.index(index=CHAT_INDEX, document=doc)
+    client.index(
+        index=CHAT_INDEX,
+        id=doc["uuid"],
+        document=doc,
+        refresh="wait_for",
+    )
 
 
 def update_chat(uuid: str, fields: Dict[str, Any]) -> None:
     client = get_es_client()
     _ensure_indices(client)
-    res = client.search(index=CHAT_INDEX, query={"term": {"uuid": uuid}})
-    hits = res.get("hits", {}).get("hits", [])
-    if not hits:
+    try:
+        client.update(index=CHAT_INDEX, id=uuid, doc=fields, doc_as_upsert=False)
+    except Exception:
         return
-    _id = hits[0]["_id"]
-    client.update(index=CHAT_INDEX, id=_id, doc=fields)
 
 
 def get_chat(uuid: str) -> Dict[str, Any] | None:
     client = get_es_client()
     _ensure_indices(client)
+    try:
+        res = client.get(index=CHAT_INDEX, id=uuid)
+        return res.get("_source")
+    except NotFoundError:
+        pass
+    except Exception:
+        return None
+
+    # fallback for older documents without deterministic IDs
     res = client.search(index=CHAT_INDEX, query={"term": {"uuid": uuid}})
     hits = res.get("hits", {}).get("hits", [])
     if not hits:
@@ -83,10 +96,10 @@ def list_chats(user_uuid: str, page: int, size: int) -> Dict[str, Any]:
 def delete_chat(uuid: str) -> None:
     client = get_es_client()
     _ensure_indices(client)
-    res = client.search(index=CHAT_INDEX, query={"term": {"uuid": uuid}})
-    hits = res.get("hits", {}).get("hits", [])
-    for hit in hits:
-        client.delete(index=CHAT_INDEX, id=hit["_id"])
+    try:
+        client.delete(index=CHAT_INDEX, id=uuid)
+    except Exception:
+        pass
     # delete messages
     client.delete_by_query(
         index=CHAT_MESSAGE_INDEX,
@@ -97,7 +110,7 @@ def delete_chat(uuid: str) -> None:
 def append_message(doc: Dict[str, Any]) -> None:
     client = get_es_client()
     _ensure_indices(client)
-    client.index(index=CHAT_MESSAGE_INDEX, document=doc)
+    client.index(index=CHAT_MESSAGE_INDEX, document=doc, refresh="wait_for")
 
 
 def list_messages(chat_uuid: str, limit: int = 50) -> List[Dict[str, Any]]:

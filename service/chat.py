@@ -16,12 +16,44 @@ from service.kb import save_qa_to_kb, get_owned_kb
 from service.openai_service import chat_completion, stream_chat_completion
 
 
+DEFAULT_CHAT_TITLE = "Untitled chat"
+LEGACY_AUTO_TITLE_CANDIDATES = {
+    "untitled chat",
+    "new chat",
+    "my conversation",
+}
+
+
 def _now_ms() -> int:
     return int(datetime.utcnow().timestamp() * 1000)
 
 
+def _should_autoname_chat(current_title: str) -> bool:
+    normalized = (current_title or "").strip().lower()
+    if not normalized:
+        return True
+    return normalized in LEGACY_AUTO_TITLE_CANDIDATES
+
+
+def _apply_auto_title(chat_obj: Chat, question: str) -> None:
+    trimmed = (question or "").strip()
+    if not trimmed:
+        return
+    if not _should_autoname_chat(chat_obj.title):
+        return
+    new_title = trimmed[:80]
+    update_chat(
+        chat_obj.uuid,
+        {
+            "title": new_title,
+            "update_at": _now_ms(),
+        },
+    )
+    chat_obj.title = new_title
+
+
 def create_chat_service(user_uuid: str, req: ChatCreate) -> Chat:
-    title = req.title or "new chat"
+    title = (req.title or "").strip() or DEFAULT_CHAT_TITLE
     kb_uuid = req.kb_uuid
     if kb_uuid and not get_owned_kb(kb_uuid, user_uuid):
         raise ValueError("knowledge base not found")
@@ -65,10 +97,12 @@ def update_chat_title_service(user_uuid: str, chat_uuid: str, title: str) -> boo
     return True
 
 
-def list_messages_service(user_uuid: str, chat_uuid: str, limit: int = 50) -> List[ChatMessage]:
+def list_messages_service(
+    user_uuid: str, chat_uuid: str, limit: int = 50
+) -> List[ChatMessage]:
     chat_data = get_chat(chat_uuid)
     if not chat_data or chat_data.get("user_uuid") != user_uuid:
-        return []
+        raise ValueError("chat not found")
     docs = list_messages(chat_uuid, limit)
     return [ChatMessage(**d) for d in docs]
 
@@ -81,6 +115,8 @@ def send_message_service(
         return None
 
     chat_obj = Chat(**chat_data)
+
+    _apply_auto_title(chat_obj, req.content)
 
     # 1. insert user message
     user_msg = ChatMessage(
@@ -109,6 +145,8 @@ def stream_message_service(
         return None
 
     chat_obj = Chat(**chat_data)
+
+    _apply_auto_title(chat_obj, req.content)
     user_msg = ChatMessage(
         uuid=str(uuid.uuid4()),
         chat_uuid=chat_uuid,

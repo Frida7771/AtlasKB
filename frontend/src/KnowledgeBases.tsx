@@ -115,7 +115,14 @@ const KnowledgeBasesPage = ({ token, selectedKbUuid, onSelectKb }: Props) => {
     setError(null);
     try {
       await axios.delete(`${API_BASE}/api/v1/kb/${uuid}`, { headers });
-      fetchList();
+      const isLastItemOnPage = items.length === 1;
+      const targetPage = isLastItemOnPage && page > 1 ? page - 1 : page;
+      setItems((prev) => prev.filter((kb) => kb.uuid !== uuid));
+      setTotal((prev) => Math.max(0, prev - 1));
+      if (selectedKbUuid === uuid && onSelectKb) {
+        onSelectKb("");
+      }
+      fetchList(targetPage);
     } catch (e: any) {
       const msg =
         e?.response?.data?.detail?.msg ||

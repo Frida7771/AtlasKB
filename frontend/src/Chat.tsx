@@ -24,6 +24,34 @@ type ChatPageProps = {
   onKbChange?: (uuid: string) => void;
 };
 
+const extractErrorMessage = (err: any): string => {
+  const detail =
+    err?.detail ||
+    err?.response?.data?.detail ||
+    err?.response?.data ||
+    null;
+  if (detail?.msg) return String(detail.msg);
+  if (detail?.message) return String(detail.message);
+  return String(err?.message || "Request failed, please verify backend service or token");
+};
+
+const isChatMissingError = (err: any): boolean => {
+  const detail =
+    err?.detail ||
+    err?.response?.data?.detail ||
+    err?.response?.data ||
+    null;
+  const code = detail?.code ?? err?.status ?? err?.response?.status;
+  const message = (
+    detail?.msg ||
+    detail?.message ||
+    err?.message ||
+    ""
+  ).toString().toLowerCase();
+  if (code === 404) return true;
+  return message.includes("chat not found");
+};
+
 const ChatPage = ({
   token,
   onLogout,
@@ -68,7 +96,7 @@ const ChatPage = ({
     onKbChange?.(value);
   };
 
-  const loadChats = async () => {
+  const loadChats = async (replace = true) => {
     if (!hasToken) return;
     setChatsLoading(true);
     setChatListError(null);
@@ -79,7 +107,12 @@ const ChatPage = ({
         params: { page: 1, size: 50 },
       });
       const list = res.data?.data?.list ?? [];
-      setChats(list);
+      setChats((prev) => {
+        if (!replace && prev.length > 0) {
+          return prev;
+        }
+        return list;
+      });
     } catch (e: any) {
       const msg =
         e?.response?.data?.detail?.msg ||
@@ -130,11 +163,15 @@ const ChatPage = ({
     }
   };
 
+
   useEffect(() => {
     if (!chatUuid || !hasToken) {
-      if (!chatUuid) {
+      if (!chatUuid && !loading) {
         setMessages([]);
       }
+      return;
+    }
+    if (loading) {
       return;
     }
     let cancelled = false;
@@ -172,10 +209,10 @@ const ChatPage = ({
     return () => {
       cancelled = true;
     };
-  }, [chatUuid, hasToken, token]);
+  }, [chatUuid, hasToken, token, loading]);
 
-  const ensureChatExists = async (question: string): Promise<string> => {
-    if (chatUuid) {
+  const ensureChatExists = async (forceNew = false): Promise<string> => {
+    if (chatUuid && !forceNew) {
       return chatUuid;
     }
     const authHeader = { Authorization: `Bearer ${token.trim()}` };
@@ -183,7 +220,7 @@ const ChatPage = ({
       `${API_BASE}/api/v1/chat`,
       {
         kb_uuid: kbUuid.trim() || null,
-        title: question.slice(0, 50) || "My conversation",
+        title: null,
       },
       { headers: authHeader }
     );
@@ -194,9 +231,15 @@ const ChatPage = ({
       throw new Error("Failed to create chat: missing uuid");
     }
     persistChatUuid(createdUuid);
-    if (created) {
-      setChats((prev) => [created, ...prev.filter((c) => c.uuid !== created.uuid)]);
-    }
+    const normalizedChat: ChatSummary = {
+      uuid: createdUuid,
+      title: created?.title || "Untitled chat",
+      update_at: created?.update_at ?? Date.now(),
+    };
+    setChats((prev) => [
+      normalizedChat,
+      ...prev.filter((c) => c.uuid !== createdUuid),
+    ]);
     return createdUuid;
   };
 
@@ -217,7 +260,21 @@ const ChatPage = ({
     );
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || "Stream request failed");
+      let parsed: any = null;
+      try {
+        parsed = text ? JSON.parse(text) : null;
+      } catch (_) {
+        parsed = null;
+      }
+      const error: any = new Error(
+        parsed?.detail?.msg ||
+          parsed?.detail?.message ||
+          text ||
+          "Stream request failed"
+      );
+      error.status = response.status;
+      error.detail = parsed?.detail || parsed;
+      throw error;
     }
 
     const assistantId = `${Date.now()}-assistant`;
@@ -287,19 +344,31 @@ const ChatPage = ({
       { id: userMessageId, role: "user", content: question },
     ]);
 
+    const wasNewChat = !chatUuid;
+
     try {
       setLoading(true);
-      const currentChatUuid = await ensureChatExists(question);
+      const currentChatUuid = await ensureChatExists();
       await streamAssistantReply(currentChatUuid, question);
-      loadChats();
+      if (wasNewChat) {
+        await loadChats();
+      }
     } catch (e: any) {
       console.error(e);
-      const msg =
-        e?.response?.data?.detail?.msg ||
-        e?.response?.data?.detail ||
-        e?.message ||
-        "Request failed, please verify backend service or token";
-      setError(String(msg));
+      if (isChatMissingError(e)) {
+        try {
+          persistChatUuid(null);
+          const freshChatUuid = await ensureChatExists(true);
+          await streamAssistantReply(freshChatUuid, question);
+          await loadChats();
+          return;
+        } catch (retryErr: any) {
+          console.error(retryErr);
+          setError(extractErrorMessage(retryErr));
+          return;
+        }
+      }
+      setError(extractErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -335,7 +404,10 @@ const ChatPage = ({
           </div>
           <div style={styles.chatListHeader}>
             <div>Existing chats</div>
-            <button style={styles.refreshBtn} onClick={loadChats}>
+            <button
+              style={styles.refreshBtn}
+              onClick={() => loadChats()}
+            >
               Refresh
             </button>
           </div>
@@ -372,12 +444,14 @@ const ChatPage = ({
                         : ""}
                     </div>
                   </button>
-                  <button
-                    style={styles.renameBtn}
-                    onClick={() => handleRenameChat(chat.uuid, chat.title)}
-                  >
-                    Rename
-                  </button>
+                  <div style={styles.chatRowActions}>
+                    <button
+                      style={styles.renameBtn}
+                      onClick={() => handleRenameChat(chat.uuid, chat.title)}
+                    >
+                      Rename
+                    </button>
+                  </div>
                 </div>
               ))
             )}
@@ -645,16 +719,16 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: "auto",
     display: "flex",
     flexDirection: "column",
-    gap: 8,
+    gap: 10,
     minHeight: 0,
   },
   chatListRow: {
     display: "flex",
-    gap: 6,
+    gap: 8,
     alignItems: "center",
   },
   chatListItem: {
-    padding: "10px 12px",
+    padding: "12px 16px",
     borderRadius: 12,
     display: "flex",
     flexDirection: "column",
@@ -662,6 +736,7 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     background: "#fff",
     flex: 1,
+    maxWidth: 220,
   },
   chatListTitle: {
     fontSize: 14,
@@ -673,14 +748,18 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#94a3b8",
   },
   renameBtn: {
-    padding: "6px 10px",
-    borderRadius: 10,
+    padding: "6px 12px",
+    borderRadius: 999,
     border: "1px solid #d0d7de",
     background: "#fff",
     cursor: "pointer",
     fontSize: 12,
     color: "#0f172a",
     whiteSpace: "nowrap",
+    minWidth: 76,
+  },
+  chatRowActions: {
+    display: "flex",
   },
   contextBox: {
     marginTop: 12,
