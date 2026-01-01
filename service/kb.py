@@ -5,7 +5,19 @@ import json
 import zipfile
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from pathlib import Path
 import re
+from collections import Counter
+
+import pandas as pd
+from docx import Document as DocxDocument
+from pptx import Presentation
+from pdfminer.high_level import extract_text as extract_pdf_text
+
+import pandas as pd
+from docx import Document as DocxDocument
+from pptx import Presentation
+from pdfminer.high_level import extract_text as extract_pdf_text
 
 from dao.kb_dao import (
     create_kb,
@@ -291,6 +303,48 @@ def fulltext_search_service(
     return search_docs_fulltext(kb_uuid, query, top_k)
 
 
+def import_kb_file_service(
+    kb_uuid: str,
+    filename: str,
+    file_bytes: bytes,
+) -> Optional[Dict[str, Any]]:
+    """
+    Parse uploaded file(s) and insert docs into KB.
+    Supports markdown/txt/csv/docx/pptx/pdf.
+    """
+    if not get_kb(kb_uuid):
+        return None
+
+    docs = _extract_docs_from_upload(filename, file_bytes)
+    summary = {
+        "total": len(docs),
+        "success": 0,
+        "failed": 0,
+        "errors": [],
+    }
+
+    for idx, payload in enumerate(docs, start=1):
+        title = (payload.get("title") or f"Imported {idx}").strip()
+        content = (payload.get("content") or "").strip()
+        if not content:
+            summary["failed"] += 1
+            if len(summary["errors"]) < 20:
+                summary["errors"].append(f"{title or 'Document'} has empty content, skipped")
+            continue
+        try:
+            create_doc_service(
+                kb_uuid,
+                KnowledgeDocumentCreate(title=title or f"Imported {idx}", content=content),
+            )
+            summary["success"] += 1
+        except Exception as exc:  # pylint: disable=broad-except
+            summary["failed"] += 1
+            if len(summary["errors"]) < 20:
+                summary["errors"].append(f"{title[:50] or 'Document'}: {exc}")
+
+    return summary
+
+
 def _retrieve_context_chunks(
     kb_uuid: str,
     question: str,
@@ -428,4 +482,193 @@ def _fetch_all_docs(kb_uuid: str, page_size: int = 200) -> List[Dict[str, Any]]:
             break
         page += 1
     return docs
+
+
+def _extract_docs_from_upload(filename: str, payload: bytes) -> List[Dict[str, str]]:
+    suffix = Path((filename or "")).suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        return _parse_markdown_documents(_decode_text(payload))
+    if suffix in {".txt", ""}:
+        return _parse_plain_text(_decode_text(payload), filename)
+    if suffix == ".csv":
+        return _parse_csv_documents(payload, filename)
+    if suffix == ".docx":
+        return _parse_docx_documents(payload, filename)
+    if suffix == ".pptx":
+        return _parse_pptx_documents(payload, filename)
+    if suffix == ".pdf":
+        return _parse_pdf_document(payload, filename)
+    raise ValueError("Unsupported file format. Use markdown/txt, csv, docx, pptx, or pdf.")
+
+
+def _decode_text(data: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1", errors="ignore")
+
+
+def _parse_plain_text(text: str, filename: str) -> List[Dict[str, str]]:
+    text = text.strip()
+    if not text:
+        return []
+    return [{"title": Path(filename or "").stem or "Imported note", "content": text}]
+
+
+def _parse_markdown_documents(text: str) -> List[Dict[str, str]]:
+    lines = text.splitlines()
+    docs: List[Dict[str, str]] = []
+    buffer: List[str] = []
+    current_title: Optional[str] = None
+
+    for line in lines:
+        heading = re.match(r"^(#{1,6})\s+(.*)$", line.strip())
+        if heading:
+            if buffer:
+                docs.append({"title": current_title or "Section", "content": "\n".join(buffer).strip()})
+                buffer = []
+            current_title = heading.group(2).strip()
+        else:
+            buffer.append(line)
+
+    if buffer:
+        docs.append({"title": current_title or "Section", "content": "\n".join(buffer).strip()})
+
+    docs = [d for d in docs if d["content"]]
+    if not docs and text.strip():
+        docs.append({"title": "Imported note", "content": text.strip()})
+    return docs
+
+
+def _parse_csv_documents(data: bytes, filename: str) -> List[Dict[str, str]]:
+    df = pd.read_csv(io.BytesIO(data)).fillna("")
+    if df.empty:
+        return []
+    docs: List[Dict[str, str]] = []
+    for idx, row in df.iterrows():
+        title = str(row.get("title") or row.get("name") or f"Row {idx + 1}").strip()
+        content = str(row.get("content") or row.get("text") or "").strip()
+        if not content:
+            extra_parts = []
+            for col in df.columns:
+                if col in {"title", "name", "content", "text"}:
+                    continue
+                value = str(row.get(col) or "").strip()
+                if value:
+                    extra_parts.append(f"{col}: {value}")
+            content = "\n".join(extra_parts)
+        if content:
+            docs.append({"title": title or f"Row {idx + 1}", "content": content})
+    return docs
+
+
+def _parse_docx_documents(data: bytes, filename: str) -> List[Dict[str, str]]:
+    document = DocxDocument(io.BytesIO(data))
+    paragraphs = [p.text.strip() for p in document.paragraphs if p.text.strip()]
+    text = "\n\n".join(paragraphs)
+    if not text:
+        return []
+    title = document.core_properties.title or Path(filename or "").stem or "DOCX document"
+    return [{"title": title, "content": text}]
+
+
+def _parse_pptx_documents(data: bytes, filename: str) -> List[Dict[str, str]]:
+    presentation = Presentation(io.BytesIO(data))
+    docs: List[Dict[str, str]] = []
+    for idx, slide in enumerate(presentation.slides, start=1):
+        texts: List[str] = []
+        for shape in slide.shapes:
+            if hasattr(shape, "text") and shape.text:
+                texts.append(shape.text.strip())
+        content = "\n".join(t for t in texts if t)
+        if content:
+            title = texts[0] if texts else f"Slide {idx}"
+            docs.append({"title": title, "content": content})
+    if not docs:
+        aggregated: List[str] = []
+        for slide in presentation.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text:
+                    aggregated.append(shape.text.strip())
+        if aggregated:
+            title = Path(filename or "").stem or "PPTX document"
+            docs.append({"title": title, "content": "\n".join(aggregated)})
+    return docs
+
+
+def _parse_pdf_document(data: bytes, filename: str) -> List[Dict[str, str]]:
+    raw_text = extract_pdf_text(io.BytesIO(data))
+    pages_raw = [page.strip() for page in raw_text.split("\f") if page.strip()]
+    if not pages_raw:
+        return []
+
+    page_lines: List[List[str]] = []
+    for page in pages_raw:
+        lines = [line.strip() for line in page.splitlines() if line.strip()]
+        if lines:
+            page_lines.append(lines)
+
+    if not page_lines:
+        return []
+
+    # detect repeating headers/footers (first/last line that appear on majority pages)
+    header_counter = Counter(lines[0] for lines in page_lines if lines)
+    footer_counter = Counter(lines[-1] for lines in page_lines if lines)
+    threshold = max(2, len(page_lines) // 2)
+    header_texts = {text for text, count in header_counter.items() if count >= threshold}
+    footer_texts = {text for text, count in footer_counter.items() if count >= threshold}
+
+    docs: List[Dict[str, str]] = []
+    base_title = Path(filename or "").stem or "PDF document"
+    for idx, lines in enumerate(page_lines, start=1):
+        filtered: List[str] = []
+        for i, line in enumerate(lines):
+            if i == 0 and line in header_texts:
+                continue
+            if i == len(lines) - 1 and line in footer_texts:
+                continue
+            filtered.append(line)
+        chunks = _split_paragraphs("\n".join(filtered).strip())
+        for chunk_idx, chunk in enumerate(chunks, start=1):
+            docs.append(
+                {
+                    "title": f"{base_title} - Page {idx} - Part {chunk_idx}",
+                    "content": chunk,
+                }
+            )
+
+    if not docs:
+        docs.append({"title": base_title, "content": "\n\n".join(pages_raw)})
+    return docs
+
+
+def _split_paragraphs(text: str, max_chars: int = 1200) -> List[str]:
+    """
+    Split text by blank line / sentence boundaries while enforcing max length.
+    """
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    chunks: List[str] = []
+
+    for para in paragraphs:
+        if len(para) <= max_chars:
+            chunks.append(para)
+            continue
+        sentences = re.split(r"(?<=[。．.!?])\s+", para)
+        current = ""
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            if len(current) + len(sentence) + 1 <= max_chars:
+                current = f"{current} {sentence}".strip()
+            else:
+                if current:
+                    chunks.append(current)
+                current = sentence
+        if current:
+            chunks.append(current)
+
+    return chunks or [text]
 

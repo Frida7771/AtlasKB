@@ -1,4 +1,4 @@
-## AtlasKB
+## AtlasKB 
 
 AtlasKB is a full-stack knowledge management platform that lets teams ingest notes, search them in Elasticsearch, and chat with an OpenAI-powered assistant that cites the knowledge base.
 
@@ -11,6 +11,7 @@ The repository contains both the **FastAPI backend** (auth, KB CRUD, chat/QA wor
 | Area | Capabilities |
 | ---- | ------------ |
 | Knowledge bases | Create/list/delete, copy UUIDs for binding, export Zip bundles (docs + embeddings) for backup or migration. |
+| Document ingestion | Upload markdown/txt, CSV, DOCX, PPTX, or PDF files to auto-create KB docs (embeddings generated on import). |
 | Document store | Chat/QA turns automatically become `Q:` / `A:` documents, chunked and embedded into ES (`kb_index`, `kb_doc_index`, `kb_doc_embed_index`). |
 | Chat workspace | Multi-turn chat with KB binding, rename chats, clear conversation, view referenced snippets, switch between chats. |
 | QA API | `POST /api/v1/kb/{kb_uuid}/qa` retrieves vector-similar chunks and asks OpenAI for an answer, writing results back to the KB. |
@@ -85,7 +86,7 @@ npm run dev                      # http://127.0.0.1:5173
 
 | Login & Tabs | Chat Workspace |
 | --- | --- |
-| ![Login](demo/4.jpg) | ![Chat](demo/3.jpg) |
+| ![Login](demo/4v.jpg) | ![Chat](demo/3v.jpg) |
 
 | Keyword Search | Knowledge Bases |
 | --- | --- |
@@ -100,6 +101,7 @@ npm run dev                      # http://127.0.0.1:5173
 - `_generate_and_store_embeddings_for_doc` centralizes chunking + vector upserts—reuse it when importing or programmatically inserting content.
 - Elasticsearch indices are created lazily; delete them via Kibana DevTools to reset state.
 - Exports are Zip files containing `kb.json`, `docs.json`, `embeddings.json`, making manual backups trivial.
+- Document ingestion currently accepts markdown/txt, CSV, DOCX, PPTX, and PDF files; extend `_extract_docs_from_upload` for more formats.
 
 ---
 

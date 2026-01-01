@@ -26,6 +26,7 @@ const KnowledgeBasesPage = ({ token, selectedKbUuid, onSelectKb }: Props) => {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [exportingKb, setExportingKb] = useState<string | null>(null);
+  const [importingKb, setImportingKb] = useState<string | null>(null);
 
   const hasToken = token.trim().length > 0;
 
@@ -133,6 +134,48 @@ const KnowledgeBasesPage = ({ token, selectedKbUuid, onSelectKb }: Props) => {
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const handleImport = (kbUuid: string) => {
+    if (!hasToken) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".md,.markdown,.txt,.csv,.docx,.pptx,.pdf";
+    input.onchange = async (event) => {
+      const file = (event.target as HTMLInputElement).files?.[0];
+      if (!file) {
+        return;
+      }
+      setImportingKb(kbUuid);
+      setError(null);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await axios.post(
+          `${API_BASE}/api/v1/kb/${kbUuid}/import`,
+          formData,
+          { headers }
+        );
+        const summary = res.data?.data;
+        const success = summary?.success ?? 0;
+        const totalDocs = summary?.total ?? 0;
+        const failed = summary?.failed ?? Math.max(0, totalDocs - success);
+        window.alert(
+          `Import finished\nSuccess: ${success}\nFailed: ${failed}`
+        );
+      } catch (e: any) {
+        const msg =
+          e?.response?.data?.detail?.msg ||
+          e?.response?.data?.msg ||
+          e?.message ||
+          "Failed to import documents";
+        setError(String(msg));
+      } finally {
+        setImportingKb(null);
+        input.value = "";
+      }
+    };
+    input.click();
+  };
 
   const handleExport = async (kbUuid: string, kbName: string) => {
     if (!hasToken) return;
@@ -272,6 +315,13 @@ const KnowledgeBasesPage = ({ token, selectedKbUuid, onSelectKb }: Props) => {
                           {kb.uuid === selectedKbUuid
                             ? "Selected"
                             : "Use & copy"}
+                        </button>
+                        <button
+                          style={styles.importBtn}
+                          onClick={() => handleImport(kb.uuid)}
+                          disabled={importingKb === kb.uuid}
+                        >
+                          {importingKb === kb.uuid ? "Importing…" : "Import"}
                         </button>
                         <button
                           style={styles.exportBtn}
@@ -452,6 +502,14 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 12,
     border: "1px solid #d0d7de",
     background: "#eef2ff",
+    cursor: "pointer",
+    fontSize: 13,
+  },
+  importBtn: {
+    padding: "5px 12px",
+    borderRadius: 12,
+    border: "1px solid #cbd5f5",
+    background: "#fff",
     cursor: "pointer",
     fontSize: 13,
   },

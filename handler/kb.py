@@ -1,7 +1,7 @@
 import io
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 from middleware.auth import get_current_user, UserClaim
@@ -111,6 +111,22 @@ async def delete_doc(
     if not ok:
         raise HTTPException(status_code=404, detail={"code": 404, "msg": "doc not found"})
     return {"code": 200, "msg": "delete success"}
+
+
+@router.post("/kb/{kb_uuid}/import", summary="bulk import docs")
+async def import_docs(
+    kb_uuid: str,
+    file: UploadFile = File(...),
+    current_user: UserClaim = Depends(get_current_user),
+) -> Dict[str, Any]:
+    content = await file.read()
+    try:
+        summary = kb_service.import_kb_file_service(kb_uuid, file.filename or "", content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": 400, "msg": str(exc)})
+    if not summary:
+        raise HTTPException(status_code=404, detail={"code": 404, "msg": "kb not found"})
+    return {"code": 200, "data": summary}
 
 
 @router.get("/kb/{kb_uuid}/export", summary="export kb bundle")
