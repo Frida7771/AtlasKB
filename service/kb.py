@@ -13,11 +13,16 @@ import pandas as pd
 from docx import Document as DocxDocument
 from pptx import Presentation
 from pdfminer.high_level import extract_text as extract_pdf_text
+from PIL import Image
 
-import pandas as pd
-from docx import Document as DocxDocument
-from pptx import Presentation
-from pdfminer.high_level import extract_text as extract_pdf_text
+# OCR support (optional - graceful fallback if not installed)
+try:
+    import pytesseract
+    from pdf2image import convert_from_bytes
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+    print("[WARN] pytesseract/pdf2image not installed, OCR disabled")
 
 from dao.kb_dao import (
     create_kb,
@@ -520,7 +525,9 @@ def _extract_docs_from_upload(filename: str, payload: bytes) -> List[Dict[str, s
         return _parse_pptx_documents(payload, filename)
     if suffix == ".pdf":
         return _parse_pdf_document(payload, filename)
-    raise ValueError("Unsupported file format. Use markdown/txt, csv, docx, pptx, or pdf.")
+    if suffix in {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp", ".gif"}:
+        return _parse_image_with_ocr(payload, filename)
+    raise ValueError("Unsupported file format. Use markdown/txt, csv, docx, pptx, pdf, or image files.")
 
 
 def _decode_text(data: bytes) -> str:
@@ -623,7 +630,21 @@ def _parse_pptx_documents(data: bytes, filename: str) -> List[Dict[str, str]]:
 def _parse_pdf_document(data: bytes, filename: str) -> List[Dict[str, str]]:
     raw_text = extract_pdf_text(io.BytesIO(data))
     pages_raw = [page.strip() for page in raw_text.split("\f") if page.strip()]
+    
+    # Calculate total text length to determine if OCR is needed
+    total_text_len = sum(len(p) for p in pages_raw)
+    
+    # If very little text extracted, try OCR (likely a scanned PDF)
+    if total_text_len < 100 and OCR_AVAILABLE:
+        print(f"[INFO] PDF has little text ({total_text_len} chars), trying OCR...")
+        ocr_docs = _parse_pdf_with_ocr(data, filename)
+        if ocr_docs:
+            return ocr_docs
+    
     if not pages_raw:
+        # Last resort: try OCR
+        if OCR_AVAILABLE:
+            return _parse_pdf_with_ocr(data, filename)
         return []
 
     page_lines: List[List[str]] = []
@@ -664,6 +685,98 @@ def _parse_pdf_document(data: bytes, filename: str) -> List[Dict[str, str]]:
     if not docs:
         docs.append({"title": base_title, "content": "\n\n".join(pages_raw)})
     return docs
+
+
+def _parse_pdf_with_ocr(data: bytes, filename: str) -> List[Dict[str, str]]:
+    """
+    Use OCR to extract text from scanned PDF.
+    Requires: pytesseract, pdf2image, and system dependencies (tesseract, poppler)
+    """
+    if not OCR_AVAILABLE:
+        return []
+    
+    try:
+        # Convert PDF pages to images (200 DPI for good balance of speed/quality)
+        images = convert_from_bytes(data, dpi=200)
+    except Exception as exc:
+        print(f"[WARN] pdf2image failed: {exc}")
+        return []
+    
+    docs: List[Dict[str, str]] = []
+    base_title = Path(filename or "").stem or "PDF document"
+    
+    for idx, img in enumerate(images, start=1):
+        try:
+            # OCR with Chinese + English support
+            # Change lang parameter based on your needs:
+            # - 'eng' for English only
+            # - 'chi_sim' for Simplified Chinese
+            # - 'chi_tra' for Traditional Chinese
+            # - 'chi_sim+eng' for both
+            text = pytesseract.image_to_string(img, lang='chi_sim+eng')
+            text = _clean_ocr_text(text)
+            
+            if text:
+                chunks = _split_paragraphs(text)
+                for chunk_idx, chunk in enumerate(chunks, start=1):
+                    docs.append({
+                        "title": f"{base_title} - Page {idx} - Part {chunk_idx}",
+                        "content": chunk,
+                    })
+        except Exception as exc:
+            print(f"[WARN] OCR failed for page {idx}: {exc}")
+            continue
+    
+    return docs
+
+
+def _parse_image_with_ocr(data: bytes, filename: str) -> List[Dict[str, str]]:
+    """
+    Use OCR to extract text from image files.
+    Supports: jpg, png, bmp, tiff, webp, gif
+    """
+    if not OCR_AVAILABLE:
+        raise ValueError("OCR not available. Install pytesseract and tesseract.")
+    
+    try:
+        img = Image.open(io.BytesIO(data))
+        
+        # Convert to RGB if necessary (for RGBA/P mode images)
+        if img.mode in ('RGBA', 'P'):
+            img = img.convert('RGB')
+        
+        # OCR with Chinese + English
+        text = pytesseract.image_to_string(img, lang='chi_sim+eng')
+        text = _clean_ocr_text(text)
+        
+        if not text:
+            return []
+        
+        title = Path(filename or "").stem or "Image"
+        return [{"title": title, "content": text}]
+        
+    except Exception as exc:
+        print(f"[WARN] Image OCR failed: {exc}")
+        raise ValueError(f"Failed to process image: {exc}")
+
+
+def _clean_ocr_text(text: str) -> str:
+    """Clean up OCR output"""
+    if not text:
+        return ""
+    
+    # Remove excessive whitespace
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r' {2,}', ' ', text)
+    
+    # Remove common OCR artifacts
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+    
+    # Remove lines that are just whitespace or single characters
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [line for line in lines if len(line) > 1 or line.isalnum()]
+    
+    return '\n'.join(lines).strip()
 
 
 def _split_paragraphs(text: str, max_chars: int = 1200) -> List[str]:
